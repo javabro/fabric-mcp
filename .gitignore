@@ -50,5 +50,5 @@ Thumbs.db
 # Logs
 *.log
 
-# Business data (internal glossary)
-zfa_glossary.xlsx
+# Internal data
+*.xlsx
