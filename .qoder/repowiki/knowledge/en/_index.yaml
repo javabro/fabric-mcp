@@ -1,0 +1,33 @@
+# 知识卡导出索引文件
+schema_version: 1
+locale: en-US
+branch: main
+nodes_managed: true
+exported_at: "2026-08-29T17:00:40Z"
+modules:
+    "":
+        dir_name: Fabric MCP Server — Microsoft Fabric Lakehouse Explorer
+        title: Fabric MCP Server — Microsoft Fabric Lakehouse Explorer
+        scope:
+            - .gitignore
+            - CONTRIBUTING.md
+            - PLAN.md
+            - README.md
+            - requirements.txt
+            - docs/
+            - features/
+            - fabric_api_client.py
+            - fabric_auth.py
+            - fabric_duckdb_client.py
+            - fabric_mcp_service.py
+            - main.py
+            - sql_validator.py
+            - test_duckdb_paths.py
+            - test_sql_validator.py
+            - .env.example
+            - LICENSE
+            - zfa_glossary.xlsx
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
