@@ -1,22 +1,19 @@
 """Fabric MCP Server - Model Context Protocol server for Microsoft Fabric
 
-This MCP server provides AI assistants (like GitHub Copilot) with tools to interact with 
-Microsoft Fabric workspaces, lakehouses, and data through REST APIs and SQL endpoints.
+This MCP server provides AI assistants with tools to explore Microsoft Fabric
+workspaces and lakehouses. Catalog calls use the Fabric REST API. Table data is
+queried with DuckDB against OneLake Delta tables (SELECT-only).
 
 Available Tools:
 - list_workspaces: Discover all accessible Fabric workspaces
-- list_lakehouses: List lakehouses within a specific workspace  
+- list_lakehouses: List lakehouses within a specific workspace
 - get_lakehouse_tables: Enumerate all tables in a lakehouse (supports schema-enabled lakehouses)
 - get_table_schema: Retrieve detailed column metadata from tables
 - get_table_sample_data: Sample data from tables for exploration and understanding
-- execute_custom_sql_query: Run custom SQL queries for analytics and reporting
-- sign_out: Clear cached authentication tokens (interactive auth only)
+- execute_custom_sql_query: Run a SELECT (DuckDB SQL) against lakehouse Delta tables
 
-Authentication: Supports both interactive (device code flow) and service principal auth
-Backend: Uses FastMCP for stdio transport to VS Code
-Requirements: See README.md for setup instructions
-
-Usage: Configure in VS Code via mcp.json to enable automatic Copilot integration
+Authentication: Azure CLI (`az login`) or service principal via .env
+Backend: FastMCP stdio + DuckDB (azure + delta_scan)
 """
 
 from typing import Any
@@ -37,16 +34,10 @@ service = FabricMCPService()
 
 @mcp.tool()
 async def list_workspaces() -> dict[str, Any]:
-    """List all Fabric workspaces the user has access to.
-    
-    This is the first tool to call when exploring Fabric. Returns workspace IDs needed
-    for all other discovery and query tools.
-    
-    Use this when:
-    - Starting exploration of available Fabric resources
-    - Need to find a specific workspace ID
-    - Want to see all available workspaces
-    
+    """List Microsoft Fabric workspaces (id + name). Call this first; later tools need the workspace GUID, not the display name (e.g. not "GLB-Storage-DEV").
+
+    Use for Fabric / OneLake / lakehouse questions when the workspace UUID is unknown.
+
     Returns:
         dict: {"workspaces": [{"id": str, "name": str}, ...]}
     """
@@ -55,19 +46,13 @@ async def list_workspaces() -> dict[str, Any]:
 
 @mcp.tool()
 async def list_lakehouses(workspace_id: str) -> dict[str, Any]:
-    """List all lakehouses in a workspace.
-    
-    Call this after list_workspaces() to find lakehouses. Returns lakehouse IDs needed
-    for table discovery and queries.
-    
-    Use this when:
-    - Finding which lakehouses exist in a workspace
-    - Need a lakehouse ID for data exploration
-    - Exploring data storage locations
-    
+    """List Microsoft Fabric lakehouses in a workspace. workspace_id is the GUID from list_workspaces, not the workspace display name.
+
+    Returns lakehouse GUIDs required by table and SQL tools.
+
     Args:
-        workspace_id: Workspace ID (from list_workspaces)
-    
+        workspace_id: Fabric workspace GUID from list_workspaces (UUID, not the name).
+
     Returns:
         dict: {"lakehouses": [{"id": str, "name": str}, ...]}
     """
@@ -76,28 +61,17 @@ async def list_lakehouses(workspace_id: str) -> dict[str, Any]:
 
 @mcp.tool()
 async def get_lakehouse_tables(workspace_id: str, lakehouse_id: str) -> dict[str, Any]:
-    """List all tables in a lakehouse (supports schema-enabled lakehouses).
-    
-    Returns all tables with schema prefixes (e.g., "silver.customers") for use in
-    other tools. SQL-based discovery works reliably with complex schemas.
-    
-    Use this when:
-    - Discovering available tables for analysis
-    - Understanding lakehouse structure
-    - Getting table names to use with get_table_schema() or get_table_sample_data()
+    """List OneLake Delta tables in a Microsoft Fabric lakehouse. Returns full_name (schema.table, e.g. dbo.zfa_glossary) for schema/sample/SQL tools.
+
+    Use when you need table names. Skip if you already have schema.table. Lists OneLake folders only; does not open Delta files.
 
     Args:
-        workspace_id: Workspace ID
-        lakehouse_id: Lakehouse ID (from list_lakehouses)
-    
+        workspace_id: Fabric workspace GUID from list_workspaces.
+        lakehouse_id: Fabric lakehouse GUID from list_lakehouses.
+
     Returns:
-        dict: {
-            "tables": [
-                {"schema": str, "name": str, "type": str, "full_name": str},
-                ...
-            ]
-        }
-    Note: Use the "full_name" field (e.g., "silver.customers") with other tools.
+        dict: {"tables": [{"schema": str, "name": str, "type": str, "full_name": str}, ...]}
+        Use full_name with get_table_schema, get_table_sample_data, and execute_custom_sql_query.
     """
     return await service.get_lakehouse_tables(workspace_id, lakehouse_id)
 
@@ -108,26 +82,17 @@ async def get_lakehouse_tables(workspace_id: str, lakehouse_id: str) -> dict[str
 
 @mcp.tool()
 async def get_table_schema(workspace_id: str, lakehouse_id: str, table_name: str) -> dict[str, Any]:
-    """Get column definitions (names, types, nullability) for a table.
-    
-    Use this to understand table structure before writing queries or sampling data.
-    Returns complete metadata needed to write correct SQL.
-    
-    Use this when:
-    - Understanding table structure before queries
-    - Checking column names and data types
-    - Verifying nullability or precision requirements
-    - Planning SQL joins or filters
-    
+    """Column names and types for one Microsoft Fabric lakehouse table. table_name must be full_name from get_lakehouse_tables (e.g. dbo.zfa_glossary), not an unqualified name.
+
+    Use before writing DuckDB SQL if column names are unknown.
+
     Args:
-        workspace_id: Workspace ID
-        lakehouse_id: Lakehouse ID
-        table_name: Table name (use full_name from get_lakehouse_tables, e.g., "silver.customers")
-    
+        workspace_id: Fabric workspace GUID from list_workspaces.
+        lakehouse_id: Fabric lakehouse GUID from list_lakehouses.
+        table_name: schema.table (full_name), e.g. "dbo.zfa_glossary" or "silver.customers".
+
     Returns:
-        dict with "table_name" and "columns" array:
-        - Each column has: name, data_type, is_nullable, precision, scale, position
-        Example: {"name": "customer_id", "data_type": "INT", "is_nullable": False, ...}
+        dict with "table_name" and "columns" (name, data_type, is_nullable, position, ...).
     """
     return await service.get_table_schema(workspace_id, lakehouse_id, table_name)
 
@@ -139,25 +104,18 @@ async def get_table_sample_data(
     table_name: str,
     limit: int = 10
 ) -> dict[str, Any]:
-    """Peek at data in a table (sample rows) to understand content and format.
-    
-    Returns first N rows showing actual values, data quality, and content patterns.
-    Faster than full queries for quick exploration.
-    
-    Use this when:
-    - Exploring table content before writing queries
-    - Checking data quality and formats
-    - Seeing real values to understand field meanings
-    - Verifying table is populated before complex analysis
-    
+    """First N rows from a Microsoft Fabric lakehouse Delta table (DuckDB LIMIT, not a random sample). table_name must be schema.table (e.g. dbo.zfa_glossary).
+
+    Use to peek at values. For COUNT, JOIN, WHERE, GROUP BY, or filtered extracts use execute_custom_sql_query.
+
     Args:
-        workspace_id: Workspace ID
-        lakehouse_id: Lakehouse ID
-        table_name: Table name (use full_name from get_lakehouse_tables, e.g., "silver.customers")
-        limit: Rows to return (default: 10). Increase for larger samples.
-    
+        workspace_id: Fabric workspace GUID from list_workspaces.
+        lakehouse_id: Fabric lakehouse GUID from list_lakehouses.
+        table_name: schema.table (full_name), e.g. "dbo.zfa_glossary".
+        limit: Row cap (default 10).
+
     Returns:
-        dict with "table_name", "sample_rows" array, and "row_count"
+        dict with "table_name", "sample_rows", and "row_count".
     """
     return await service.get_table_sample_data(workspace_id, lakehouse_id, table_name, limit)
 
@@ -168,52 +126,21 @@ async def execute_custom_sql_query(
     lakehouse_id: str,
     query: str
 ) -> dict[str, Any]:
-    """Execute any SQL query for analysis, aggregation, and reporting.
-    
-    Supports SELECT with JOINs, GROUP BY, WHERE, aggregations, and calculated fields.
-    Use after understanding tables with get_lakehouse_tables and get_table_schema.
-    
-    Use this when:
-    - Running analytical queries (e.g., revenue by category)
-    - Joining multiple tables
-    - Aggregating data (SUM, COUNT, GROUP BY)
-    - Filtering and transforming data
-    - Complex business logic queries
-    
+    """DuckDB SELECT on Microsoft Fabric OneLake Delta (local DuckDB, not Spark or T-SQL). IDs are GUIDs from list_workspaces/list_lakehouses. Quote tables as "schema"."table" (e.g. SELECT COUNT(*) FROM "dbo"."zfa_glossary"). Use LIMIT, not TOP.
+
+    Joins, WHERE, GROUP BY, and aggregations are allowed. Writes, DDL, COPY, ATTACH, and multi-statement batches are rejected. Results cap at 1000 rows.
+
+    Use for row counts, filters, joins, and analysis. Do not use to list workspaces. Prefer get_table_sample_data only for a quick unfiltered peek.
+
     Args:
-        workspace_id: Workspace ID
-        lakehouse_id: Lakehouse ID
-        query: SQL query (T-SQL dialect, e.g., "SELECT TOP 100 * FROM [schema].[table]")
-    
+        workspace_id: Fabric workspace GUID from list_workspaces.
+        lakehouse_id: Fabric lakehouse GUID from list_lakehouses.
+        query: One DuckDB SELECT or WITH…SELECT. Example: SELECT COUNT(*) AS n FROM "dbo"."zfa_glossary"
+
     Returns:
-        dict with "success", "query", "row_count", and "results" array
-        Example success: {"success": True, "row_count": 42, "results": [{...}, ...]}
-        Example error: {"success": False, "error": "[error message]"}
+        dict: success, query, row_count, results; truncated=true if the 1000-row cap applied.
     """
     return await service.execute_custom_sql_query(workspace_id, lakehouse_id, query)
-
-
-# ============================================================================
-# MCP Tools - Authentication Management
-# ============================================================================
-
-@mcp.tool()
-async def sign_out() -> dict[str, str]:
-    """Sign out and clear cached authentication tokens.
-    
-    Use this to force re-authentication (interactive auth) or when switching users.
-    Only affects interactive authentication mode (device code flow).
-    
-    Use this when:
-    - Switching to a different user account
-    - Fixing authentication issues
-    - Testing multi-user scenarios
-    - Debugging permission errors
-    
-    Returns:
-        dict: {"status": "success" or "not_applicable", "message": str}
-    """
-    return service.sign_out()
 
 
 # ============================================================================

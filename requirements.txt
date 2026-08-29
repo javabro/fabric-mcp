@@ -1,4 +1,6 @@
-fastmcp
-msal
+fastmcp>=3,<4
 httpx
 python-dotenv
+azure-identity
+duckdb
+pytz

@@ -1,71 +1,27 @@
 # Fabric MCP Server
 
-A Python-based Model Context Protocol (MCP) server for interacting with Microsoft Fabric APIs via GitHub Copilot in VS Code.
+MCP server for exploring Microsoft Fabric lakehouses: workspaces, tables, samples, and SELECT queries.
 
-## Overview
-
-This MCP server exposes tools that allow GitHub Copilot to:
-- List Microsoft Fabric workspaces
-- List lakehouses in a workspace
-- (More tools can be added for pipelines, GraphQL queries, etc.)
+Catalog uses the Fabric REST API. Table data is read with **DuckDB** (`delta_scan` + Azure storage token) from OneLake Delta. Custom SQL is SELECT-only. See `PLAN.md`.
 
 ## Prerequisites
 
 - Python 3.12+
-- Conda (recommended) or Python virtual environment
-- ODBC Driver 17 (or 18) for SQL Server
-- GitHub Copilot in VS Code
-- (Optional) Microsoft Entra ID app registration for service principal authentication
+- Azure CLI (`az login` on the same tenant as Fabric)
+- An MCP client (Cursor / VS Code Copilot)
 
 ## Setup
 
-### 1. Create and activate conda environment
-
 ```bash
-conda create -p ./env python=3.12 -y
-conda activate ./env
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+az login
 ```
 
-### 2. Install dependencies
+Service principal (optional): copy `.env.example` to `.env` and set `FABRIC_CLIENT_ID`, `FABRIC_CLIENT_SECRET`, `FABRIC_TENANT_ID`.
 
-```bash
-pip install fastmcp python-dotenv msal httpx pyodbc
-pip freeze > requirements.txt
-```
-
-### 3. Configure authentication
-
-The server supports two authentication modes:
-
-#### Option 1: Interactive Authentication (Recommended for Individual Users)
-
-**No configuration needed!** The server uses device code flow by default.
-
-On first run, you'll see a prompt in the MCP server output with:
-- A URL to visit (https://microsoft.com/devicelogin)
-- A code to enter
-- Instructions to sign in with your Microsoft account
-
-Tokens are cached in `~/.fabric_mcp_token_cache.json` and will be refreshed automatically.
-
-#### Option 2: Service Principal Authentication (For Automation)
-
-Copy `.env.example` to `.env` and configure service principal credentials:
-
-```bash
-cp .env.example .env
-```
-
-Edit `.env`:
-```
-FABRIC_CLIENT_ID=your_client_id_here
-FABRIC_CLIENT_SECRET=your_client_secret_here
-FABRIC_TENANT_ID=your_tenant_id_here
-```
-
-The presence of `FABRIC_CLIENT_SECRET` triggers service principal authentication.
-
-### 4. Run the MCP server
+### Run the MCP server
 
 For stdio transport (recommended for VS Code):
 ```bash
@@ -112,7 +68,7 @@ Lists all lakehouses in a specific workspace.
 ```
 
 ### `get_lakehouse_tables(workspace_id: str, lakehouse_id: str)`
-Get all tables in a lakehouse. Works with both schema-enabled and schema-less lakehouses using SQL-based discovery.
+Get all tables in a lakehouse. Works with both schema-enabled and schema-less lakehouses (OneLake `Tables/` listing).
 
 **Parameters:**
 - `workspace_id` (str): The ID of the workspace
@@ -174,12 +130,7 @@ Get sample data from a table.
 ```
 
 ### `execute_custom_sql_query(workspace_id: str, lakehouse_id: str, query: str)`
-Execute a custom SQL query against a lakehouse.
-
-**Parameters:**
-- `workspace_id` (str): The ID of the workspace
-- `lakehouse_id` (str): The ID of the lakehouse
-- `query` (str): The SQL query to execute
+Run a DuckDB **SELECT** (joins, aggregations, CTEs). Writes and multi-statement batches are rejected. Results cap at 1000 rows.
 
 **Returns:**
 ```json
@@ -188,17 +139,6 @@ Execute a custom SQL query against a lakehouse.
   "success": true,
   "row_count": 100,
   "results": [{"CustomerID": 1, "Name": "John"}]
-}
-```
-
-### `sign_out()`
-Sign out and clear cached authentication tokens (interactive auth only).
-
-**Returns:**
-```json
-{
-  "status": "success",
-  "message": "Signed out successfully."
 }
 ```
 
@@ -224,7 +164,7 @@ Sign out and clear cached authentication tokens (interactive auth only).
   "github.copilot.chat.mcp.enabled": true,
   "github.copilot.chat.mcp.servers": {
     "fabric": {
-      "command": "python",
+      "command": "${workspaceFolder}/.venv/bin/python",
       "args": ["main.py"],
       "cwd": "${workspaceFolder}"
     }
@@ -294,14 +234,18 @@ async def my_new_tool(param: str) -> dict:
 ## Troubleshooting
 
 ### Token acquisition fails
-- Verify your app registration has correct API permissions
-- Ensure admin consent is granted for application permissions
-- Check that the service principal has necessary Fabric roles
+- Run `az account show` and confirm the tenant matches Fabric.
+- `az login --tenant <fabric-tenant-id>`
+- Workspace Viewer (or higher) is required to list items. OneLake **file** reads can still 403 if OneLake security roles block the identity.
 
-### Tools not appearing in Copilot
-- Verify the MCP server is properly configured in VS Code settings
-- Check the VS Code output panel for MCP-related errors
-- Restart VS Code after configuration changes
+### DuckDB / OneLake read fails
+- First run downloads DuckDB `azure` and `delta` extensions (needs network).
+- Use workspace/lakehouse **GUIDs** from the list tools, not display names.
+- If you see "no files in log segment", retry; that was a 2026 OneLake list-API bug (mostly fixed; GUID paths avoid it).
+
+### Tools not appearing
+- MCP command must be `.venv/bin/python` (see `.vscode/mcp.json`).
+- Restart the MCP server after `pip install`.
 
 ## Contributing
 
