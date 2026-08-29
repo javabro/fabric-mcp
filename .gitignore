@@ -28,6 +28,7 @@ wheels/
 # Virtual environments
 env/
 venv/
+.venv/
 ENV/
 env.bak/
 venv.bak/
@@ -36,6 +37,8 @@ venv.bak/
 .vscode/*
 !.vscode/mcp.json
 .idea/
+.cursor/
+.qoder/
 *.swp
 *.swo
 *~
@@ -46,3 +49,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Business data (internal glossary)
+zfa_glossary.xlsx
