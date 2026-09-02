@@ -64,6 +64,7 @@ Allow `SELECT` and `WITH … SELECT`. Reject writes/DDL/`EXEC`/`COPY`/`ATTACH`, 
 - SQL endpoint views and RLS/CLS/OLS are **not** applied (raw Delta).
 - Sample is first N rows (`LIMIT`), not random.
 - Custom SELECT results capped at 1000 rows.
+- Data-volume guard: before `execute_query`/`execute_query_capped` run, referenced tables' total on-disk size is checked (cheap recursive OneLake listing, no data read) against `FABRIC_MAX_QUERY_SCAN_MB` (default 10 MB, `0` disables). Over cap raises with a size/table breakdown instead of scanning. `LIMIT` does not bypass this — DuckDB still reads whole Delta files. Bypass via `confirm_large_scan=True`, only after a human approves the reported breakdown.
 
 ## Ideas (later)
 

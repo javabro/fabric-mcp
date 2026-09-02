@@ -34,11 +34,11 @@ env.bak/
 venv.bak/
 
 # IDE
-.vscode/*
-!.vscode/mcp.json
+.vscode/
 .idea/
 .cursor/
 .qoder/
+.github/
 *.swp
 *.swo
 *~

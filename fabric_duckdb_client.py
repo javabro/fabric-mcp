@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import threading
 from typing import Any, Dict, List, Optional, Tuple
@@ -18,6 +19,9 @@ STORAGE_SCOPE = "https://storage.azure.com/.default"
 ONELAKE_DFS = "https://onelake.dfs.fabric.microsoft.com"
 MAX_RESULT_ROWS = 1000
 DFS_VERSION = "2023-11-03"
+# Hard cap on total on-disk size of tables a single query may touch. Checked via
+# cheap OneLake metadata listing before any actual data is scanned. 0 disables it.
+MAX_QUERY_SCAN_BYTES = int(os.environ.get("FABRIC_MAX_QUERY_SCAN_MB", "10")) * 1024 * 1024
 _SKIP_DIR_NAMES = frozenset({"_delta_log", "_symlink_format_manifest"})
 _SYSTEM_SCHEMAS = frozenset({"information_schema", "pg_catalog"})
 _FROM_JOIN = re.compile(r"\b(?:FROM|JOIN)\s+", re.I)
@@ -131,6 +135,7 @@ class FabricDuckDBClient:
         self._default_schema = "dbo"
         self._tables: List[Tuple[str, str, str]] = []
         self._registered: List[Tuple[str, str]] = []
+        self._table_size_cache: Dict[Tuple[str, str, str, str], int] = {}
 
     def _storage_token(self) -> str:
         return self.auth_provider.get_access_token(STORAGE_SCOPE)
@@ -160,7 +165,9 @@ class FabricDuckDBClient:
             """
         )
 
-    async def _dfs_list(self, workspace_id: str, directory: str) -> List[Dict[str, Any]]:
+    async def _dfs_list(
+        self, workspace_id: str, directory: str, *, recursive: bool = False
+    ) -> List[Dict[str, Any]]:
         token = self._storage_token()
         url = f"{ONELAKE_DFS}/{workspace_id}"
         headers = {
@@ -174,7 +181,7 @@ class FabricDuckDBClient:
             while True:
                 params: Dict[str, str] = {
                     "resource": "filesystem",
-                    "recursive": "false",
+                    "recursive": "true" if recursive else "false",
                     "directory": directory,
                 }
                 if continuation:
@@ -366,15 +373,70 @@ class FabricDuckDBClient:
         with self._lock:
             return list(self._tables)
 
+    async def _table_size_bytes(
+        self, workspace_id: str, lakehouse_id: str, schema: str, table: str
+    ) -> int:
+        key = (workspace_id, lakehouse_id, schema, table)
+        cached = self._table_size_cache.get(key)
+        if cached is not None:
+            return cached
+        directory = f"{lakehouse_id}/Tables/{schema}/{table}"
+        entries = await self._dfs_list(workspace_id, directory, recursive=True)
+        total = sum(
+            int(entry.get("contentLength") or 0)
+            for entry in entries
+            if not is_dfs_directory(entry)
+        )
+        self._table_size_cache[key] = total
+        return total
+
+    async def _enforce_scan_cap(
+        self,
+        workspace_id: str,
+        lakehouse_id: str,
+        wanted: List[Tuple[str, str]],
+        confirm_large_scan: bool = False,
+    ) -> None:
+        if MAX_QUERY_SCAN_BYTES <= 0 or not wanted or confirm_large_scan:
+            return
+        sizes: List[Tuple[str, str, int]] = []
+        total = 0
+        for schema, table in wanted:
+            size = await self._table_size_bytes(workspace_id, lakehouse_id, schema, table)
+            sizes.append((schema, table, size))
+            total += size
+        if total <= MAX_QUERY_SCAN_BYTES:
+            return
+        cap_mb = MAX_QUERY_SCAN_BYTES / (1024 * 1024)
+        total_mb = total / (1024 * 1024)
+        table_lines = "\n".join(
+            f"  - {schema}.{table}: {size / (1024 * 1024):.2f} MB"
+            for schema, table, size in sizes
+        )
+        raise Exception(
+            "Query blocked by the data-volume guard: this would scan more data than the "
+            "configured cap allows.\n"
+            f"Total referenced table size: {total_mb:.2f} MB, cap: {cap_mb:.2f} MB "
+            "(set FABRIC_MAX_QUERY_SCAN_MB to change the cap).\n"
+            f"Referenced tables:\n{table_lines}\n"
+            "Narrow the query with a WHERE filter, or use Fabric's SQL endpoint or a notebook "
+            "for large scans instead.\n"
+            "HIGH RISK OVERRIDE: confirm_large_scan=true bypasses this guard and must only be "
+            "set after a human user has explicitly reviewed and approved this exact size/table "
+            "breakdown in the conversation. Never set it on the calling agent's own judgement."
+        )
+
     async def execute_query(
         self,
         workspace_id: str,
         lakehouse_id: str,
         query: str,
         max_rows: Optional[int] = MAX_RESULT_ROWS,
+        confirm_large_scan: bool = False,
     ) -> List[Dict[str, Any]]:
         await self._ensure_catalog(workspace_id, lakehouse_id)
         wanted = self._tables_for_sql(query)
+        await self._enforce_scan_cap(workspace_id, lakehouse_id, wanted, confirm_large_scan)
         rows, _truncated = await asyncio.to_thread(
             self._run_with_views, wanted, query, max_rows
         )
@@ -386,9 +448,11 @@ class FabricDuckDBClient:
         lakehouse_id: str,
         query: str,
         max_rows: int = MAX_RESULT_ROWS,
+        confirm_large_scan: bool = False,
     ) -> tuple[List[Dict[str, Any]], bool]:
         await self._ensure_catalog(workspace_id, lakehouse_id)
         wanted = self._tables_for_sql(query)
+        await self._enforce_scan_cap(workspace_id, lakehouse_id, wanted, confirm_large_scan)
         return await asyncio.to_thread(self._run_with_views, wanted, query, max_rows)
 
     async def list_tables(self, workspace_id: str, lakehouse_id: str) -> List[Dict[str, Any]]:

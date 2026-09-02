@@ -111,7 +111,7 @@ Get detailed schema information for a table including column definitions.
 }
 ```
 
-### `get_table_sample_data(workspace_id: str, lakehouse_id: str, table_name: str, limit: int = 10)`
+### `get_table_sample_data(workspace_id: str, lakehouse_id: str, table_name: str, limit: int = 10, confirm_large_scan: bool = False)`
 Get sample data from a table.
 
 **Parameters:**
@@ -119,6 +119,7 @@ Get sample data from a table.
 - `lakehouse_id` (str): The ID of the lakehouse
 - `table_name` (str): The name of the table
 - `limit` (int): Number of rows to return (default: 10)
+- `confirm_large_scan` (bool): Bypass the data-volume guard (see below). **HIGH RISK** — only set `true` after a human has reviewed and approved a prior blocked call's size/table breakdown.
 
 **Returns:**
 ```json
@@ -129,8 +130,10 @@ Get sample data from a table.
 }
 ```
 
-### `execute_custom_sql_query(workspace_id: str, lakehouse_id: str, query: str)`
+### `execute_custom_sql_query(workspace_id: str, lakehouse_id: str, query: str, confirm_large_scan: bool = False)`
 Run a DuckDB **SELECT** (joins, aggregations, CTEs). Writes and multi-statement batches are rejected. Results cap at 1000 rows.
+
+- `confirm_large_scan` (bool): Bypass the data-volume guard (see below). **HIGH RISK** — only set `true` after a human has reviewed and approved a prior blocked call's size/table breakdown.
 
 **Returns:**
 ```json
@@ -141,6 +144,12 @@ Run a DuckDB **SELECT** (joins, aggregations, CTEs). Writes and multi-statement 
   "results": [{"CustomerID": 1, "Name": "John"}]
 }
 ```
+
+## Data-volume guard
+
+Before `get_table_sample_data` or `execute_custom_sql_query` scan any data, the total on-disk size of the referenced tables is checked with a cheap OneLake metadata listing (no Parquet read). If the total exceeds `FABRIC_MAX_QUERY_SCAN_MB` (default **10 MB**, set to `0` to disable), the call is rejected with an error listing each table's size instead of pulling data over the network. A `LIMIT` does not avoid this — DuckDB must still read whole Delta files regardless of `LIMIT`.
+
+To proceed anyway, pass `confirm_large_scan=true`. **HIGH RISK**: only do this after a human has explicitly reviewed and approved the exact size/table breakdown from the blocked call's error — never set it automatically.
 
 ## Integration with GitHub Copilot
 

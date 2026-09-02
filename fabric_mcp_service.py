@@ -93,6 +93,7 @@ class FabricMCPService:
         lakehouse_id: str,
         table_name: str,
         limit: int = 10,
+        confirm_large_scan: bool = False,
     ) -> dict[str, Any]:
         try:
             self._validate_limit(limit)
@@ -107,7 +108,11 @@ class FabricMCPService:
         sample_query = f"SELECT * FROM {qualified} LIMIT {limit}"
         try:
             results = await self.fabric_sql.execute_query(
-                workspace_id, lakehouse_id, sample_query, max_rows=limit
+                workspace_id,
+                lakehouse_id,
+                sample_query,
+                max_rows=limit,
+                confirm_large_scan=confirm_large_scan,
             )
             return {
                 "table_name": table_name,
@@ -123,7 +128,11 @@ class FabricMCPService:
             }
 
     async def execute_custom_sql_query(
-        self, workspace_id: str, lakehouse_id: str, query: str
+        self,
+        workspace_id: str,
+        lakehouse_id: str,
+        query: str,
+        confirm_large_scan: bool = False,
     ) -> dict[str, Any]:
         try:
             assert_select_only(query)
@@ -136,7 +145,7 @@ class FabricMCPService:
             }
         try:
             results, truncated = await self.fabric_sql.execute_query_capped(
-                workspace_id, lakehouse_id, query
+                workspace_id, lakehouse_id, query, confirm_large_scan=confirm_large_scan
             )
             payload: dict[str, Any] = {
                 "query": query,
