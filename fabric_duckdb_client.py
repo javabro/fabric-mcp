@@ -283,6 +283,7 @@ class FabricDuckDBClient:
             self._tables = tables
             self._default_schema = default_schema
             self._catalog_key = key
+            self._table_size_cache.clear()
 
     def _register_needed(self, wanted: List[Tuple[str, str]]) -> None:
         con = self._connect()
